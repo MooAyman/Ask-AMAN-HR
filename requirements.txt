@@ -1,0 +1,7 @@
+pypdf
+python-dotenv
+qdrant-client
+openai
+chainlit
+python-docx
+sentence-transformers
