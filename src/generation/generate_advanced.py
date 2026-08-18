@@ -1,11 +1,11 @@
-import os
-
 from dotenv import load_dotenv
+from langfuse import observe
 from openai import OpenAI
 
 load_dotenv()
 
 
+@observe(name="generation", as_type="generation")
 def generate_answer_from_contexts(query: str, contexts: list[dict]) -> dict:
     context_text = ""
     for doc in contexts:

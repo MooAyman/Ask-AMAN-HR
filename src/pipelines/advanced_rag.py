@@ -1,9 +1,16 @@
 from typing import Any
 
+from dotenv import load_dotenv
+from langfuse import get_client, observe, propagate_attributes
+
 from src.generation.generate_advanced import generate_answer_from_contexts
 from src.retrieval.hybrid_retrieve import hybrid_retrieve
 from src.retrieval.rerank import DEFAULT_RERANKER_MODEL, rerank_candidates
 from src.text.arabic import prepare_arabic_query
+
+load_dotenv()
+
+ADVANCED_PIPELINE_TAG = "pipeline:advanced"
 
 
 class AdvancedRAGPipeline:
@@ -19,35 +26,53 @@ class AdvancedRAGPipeline:
         self.alpha = alpha
         self.reranker_model = reranker_model
 
-    def retrieve(self, user_query: str) -> dict[str, Any]:
-        retrieval_query, arabic_meta = prepare_arabic_query(user_query)
-        hybrid_results = hybrid_retrieve(
+    @observe(name="hybrid-retrieval")
+    def _run_hybrid_retrieval(self, retrieval_query: str) -> list[dict[str, Any]]:
+        return hybrid_retrieve(
             query=retrieval_query,
             top_k=self.candidate_k,
             alpha=self.alpha,
         )
-        reranked_results = rerank_candidates(
+
+    @observe(name="reranking")
+    def _run_reranking(
+        self,
+        retrieval_query: str,
+        hybrid_results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return rerank_candidates(
             query=retrieval_query,
             candidates=hybrid_results,
             top_k=self.top_k,
             model_name=self.reranker_model,
         )
+
+    @observe(name="retrieval")
+    def retrieve(self, user_query: str) -> dict[str, Any]:
+        retrieval_query, arabic_meta = prepare_arabic_query(user_query)
+        hybrid_results = self._run_hybrid_retrieval(retrieval_query)
+        reranked_results = self._run_reranking(retrieval_query, hybrid_results)
         return {
             "hybrid_candidates": hybrid_results,
             "contexts": reranked_results,
             "arabic_meta": arabic_meta,
         }
 
+    @observe(name="advanced-rag-query")
     def query(self, user_query: str) -> dict[str, Any]:
-        retrieval = self.retrieve(user_query)
-        generation = generate_answer_from_contexts(
-            query=user_query,
-            contexts=retrieval["contexts"],
-        )
-        return {
-            **generation,
-            "hybrid_candidates": retrieval["hybrid_candidates"],
-        }
+        with propagate_attributes(
+            tags=[ADVANCED_PIPELINE_TAG],
+            metadata={"pipeline": "advanced"},
+        ):
+            retrieval = self.retrieve(user_query)
+            generation = generate_answer_from_contexts(
+                query=user_query,
+                contexts=retrieval["contexts"],
+            )
+            return {
+                **generation,
+                "hybrid_candidates": retrieval["hybrid_candidates"],
+            }
 
 
 def _safe_print(text: str) -> None:
